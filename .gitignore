@@ -1,0 +1,6 @@
+gcp_keys.json
+.venv/
+__pycache__/
+*.csv
+notas.txt
+EDIT00000000
