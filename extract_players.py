@@ -2,9 +2,18 @@ import requests
 import pandas as pd
 import time
 import json
+from google.cloud import bigquery
+import os
+import pandas_gbq
+
+# Autenticación GCP
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_keys.json"
 
 def scrape_pesmaster_api_paginated(max_players=3000):
-    # NOTA: Mi pipeline masivo para extraer el catálogo extendido de jugadores con variables demográficas
+    """
+    Pipeline masivo para extraer el catálogo extendido de jugadores con variables demográficas.
+    """
+
     players_list = []
     base_url = "https://www.pesmaster.com/es/efootball-2022/search/api.php"
     
@@ -53,13 +62,24 @@ def scrape_pesmaster_api_paginated(max_players=3000):
             print(f"📦 [Página {current_page}] Procesando bloque de {len(players_data)} jugadores (Acumulados: {len(players_list)})...")
                 
             for player in players_data:
+                # Validacion de campos(name, age, etc..)
+                # print(f"Player: {player}")
                 p_name = player.get("name")
                 p_age = player.get("age")
+                p_pot = player.get("pot")
                 
                 if not p_name or p_age is None:
                     continue
                 
-                # REGLA 1: Filtrar menores de 17 años (Clones/Regens artificiales del juego)
+                # REGLA 1: Filtrar potencial 0 (Clones/Regens artificiales del juego)
+                try:
+                    pot_int = int(p_pot)
+                    if pot_int == 0:
+                        continue
+                except ValueError:
+                    continue
+
+                # REGLA 2: Filtrar menores de 17 años (Clones/Regens artificiales del juego)
                 try:
                     age_int = int(p_age)
                     if age_int < 17:
@@ -67,7 +87,7 @@ def scrape_pesmaster_api_paginated(max_players=3000):
                 except ValueError:
                     continue
                 
-                # REGLA 2: Excluir nombres genéricos corruptos
+                # REGLA 3: Excluir nombres genéricos corruptos
                 if "PLAYER" in str(p_name).upper():
                     continue
                 
@@ -79,17 +99,17 @@ def scrape_pesmaster_api_paginated(max_players=3000):
                 
                 if p_ovr:
                     players_list.append({
-                        "PES_ID": int(p_id) if p_id else len(players_list) + 1,
-                        "PES_Name": str(p_name).strip(),
-                        "Position": str(p_pos).strip(),
-                        "PES_Rating": int(p_ovr),
-                        "PES_Age": age_int,
-                        "Team_Name": str(p_team).strip(),
-                        "Nat_Name": str(p_nat).strip()
+                        "pes_id": int(p_id) if p_id else len(players_list) + 1,
+                        "pes_name": str(p_name).strip(),
+                        "position": str(p_pos).strip(),
+                        "pes_rating": int(p_ovr),
+                        "pes_age": age_int,
+                        "team_name": str(p_team).strip(),
+                        "nation_name": str(p_nat).strip()
                     })
             
             current_start += batch_size
-            time.sleep(3)  # Delay preventivo anti-bloqueos
+            time.sleep(4)  # Delay preventivo anti-bloqueos
             
         except Exception as e:
             print(f"❌ Falla crítica procesando el lote de la Página {current_page}: {str(e)}")
@@ -97,15 +117,23 @@ def scrape_pesmaster_api_paginated(max_players=3000):
             
     df_pes = pd.DataFrame(players_list)
     if not df_pes.empty:
-        df_pes = df_pes.drop_duplicates(subset=["PES_ID"]).head(max_players)
+        df_pes = df_pes.drop_duplicates(subset=["pes_id"]).head(max_players)
         
     return df_pes
 
 if __name__ == "__main__":
     # Extracción masiva apuntando a las 100 páginas completas de PES Master (3000 jugadores aprox.)
-    df_resultado = scrape_pesmaster_api_paginated(max_players=3000)
+    df_resultado = scrape_pesmaster_api_paginated(max_players=5000)
     
     if not df_resultado.empty:
         print("=========================================================================")
         print(f"✅ Extracción masiva terminada. Archivo 'raw_pes_master.csv' generado con {len(df_resultado)} registros.")
-        df_resultado.to_csv("raw_pes_master.csv", index=False)
+        # df_resultado.to_csv("raw_pes_master.csv", index=False)
+
+        # Ingesta a GCP
+        pandas_gbq.to_gbq(
+            dataframe=df_resultado,
+            destination_table='pes-fantasy-project.liga_fantasia_raw.stg_pes_master',
+            project_id='pes-fantasy-project',
+            if_exists='replace'
+        )

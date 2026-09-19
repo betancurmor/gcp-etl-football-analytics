@@ -1,11 +1,5 @@
 from google.cloud import bigquery
 import pandas as pd
+import os
 
-# ID proyecto GCP
-PROJECT_ID = "pes-fantasy-project"
-DATASET_ID = "pes_analytics"
-
-def load_df_to_bigquery(df: pd.DataFrame, table_name: str):
-    """
-    Inyecta un DataFrame de Pandas a una tabla en BigQuery en modo Overwriter (WRITE_TRUNCATE).
-    """
+os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_keys.json"

@@ -2,20 +2,29 @@ import logging
 from datetime import datetime
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.ext import Application, CallbackQueryHandler, CommandHandler, MessageHandler, filters, ContextTypes
+import os
+from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
+
+# Cargar variables del archivo .env
+load_dotenv()
+
+# Leer las credenciales
+DB_USER = os.getenv("DB_USER")
+DB_PASS = os.getenv("DB_PASS")
+DB_HOST = os.getenv("DB_HOST")
+DB_PORT = os.getenv("DB_PORT")
+DB_NAME = os.getenv("DB_NAME")
+TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
+
+# Construir la conexión
+connection_string = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
+engine = create_engine(connection_string)
 
 # Configuración del log de errores para monitoreo en consola
 logging.basicConfig(
     format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO
 )
-
-TOKEN = "8616157161:AAFiC3NYbWHjP7P1NswPbqu3csIZlBW98WU"
-
-# Conexión local a la base de datos SQL Server
-SERVER = "LOCALHOST\\SQLEXPRESS"
-DATABASE = "DB_PES_Fantasy"
-connection_string = f"mssql+pyodbc://@{SERVER}/{DATABASE}?driver=ODBC+Driver+17+for+SQL+Server&trusted_connection=yes"
-engine = create_engine(connection_string)
 
 def acortar_nombre(pes_name: str) -> str:
     """Modifica el nombre largo del jugador para dejar solo la inicial y el apellido."""
@@ -35,7 +44,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     encontrado = False
     manager_pure_name = "Invitado"
     team_pure_name = "Sin Franquicia"
-    presupuesto_actual = 0.00
+    presupuesto_actual = 500.00
     texto_fichajes = "• No se registran altas"
     alertas_clausulas = "No se registran bajas por robo de cláusula."
 
@@ -57,11 +66,11 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 
                 # Consulta para extraer el historial de las 3 últimas altas
                 query_history = text(
-                    "SELECT TOP 3 p.pes_name, p.position, t.transfer_fee "
+                    "SELECT p.pes_name, p.position, t.transfer_fee "
                     "FROM fact_transactions t "
                     "INNER JOIN dim_players p ON t.player_id = p.pes_id "
                     "WHERE t.to_manager_id = :mid "
-                    "ORDER BY t.transaction_date DESC"
+                    "ORDER BY t.transaction_date DESC LIMIT 3"
                 )
                 fichajes_recientes = conn.execute(query_history, {"mid": mgr.manager_id}).fetchall()
                 
@@ -82,12 +91,12 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 
                 # Consultar alertas de cláusulas
                 query_alertas = text(
-                    "SELECT TOP 1 t.transaction_date, p.pes_name, m.manager_name "
+                    "SELECT t.transaction_date, p.pes_name, m.manager_name "
                     "FROM fact_transactions t "
                     "INNER JOIN dim_players p ON t.player_id = p.pes_id "
                     "INNER JOIN dim_managers m ON t.to_manager_id = m.manager_id "
                     "WHERE t.from_manager_id = :mid AND t.transaction_type = 'RELEASE_CLAUSE' "
-                    "ORDER BY t.transaction_date DESC"
+                    "ORDER BY t.transaction_date DESC LIMIT 1"
                 )
                 alerta = conn.execute(query_alertas, {"mid": mgr.manager_id}).fetchone()
                 if alerta:
@@ -127,7 +136,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"⚽ <b>PANEL DE CONTROL LIGA</b>\n"
             f"───────────────────────\n"
             f"⚠️ <b>Acceso Restringido - Sin Registro</b>\n\n"
-            f"Registra tu franquicia ejecutando:\n<code>/registrar Nombre_De_Tu_Equipo</code>"
+            f"Registra tu franquicia ejecutando:\n<code>/r Nombre_De_Tu_Equipo</code>"
         )
 
     if update.message:
@@ -161,7 +170,7 @@ async def registrar_manager(update: Update, context: ContextTypes.DEFAULT_TYPE) 
     telegram_id = update.effective_user.id
     manager_name = update.effective_user.first_name
     if not context.args:
-        await update.message.reply_text("⚠️ Usa: <code>/registrar Nombre_De_Tu_Equipo</code>", parse_mode="HTML")
+        await update.message.reply_text("⚠️ Usa: <code>/r Nombre_De_Tu_Equipo</code>", parse_mode="HTML")
         return
     team_name = " ".join(context.args)
     try:
@@ -184,8 +193,9 @@ async def buscar_jugador(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     try:
         with engine.connect() as conn:
             query_search = text(
-                "SELECT TOP 5 pes_id, pes_name, position, rating_range "
-                "FROM dim_players WHERE pes_name LIKE :criterio ORDER BY pes_rating DESC"
+                "SELECT pes_id, pes_name, position, rating_range "
+                "FROM dim_players WHERE LOWER(pes_name) LIKE LOWER(:criterio) "
+                "ORDER BY pes_rating DESC LIMIT 5"
             )
             resultados = conn.execute(query_search, {"criterio": f"%{criterio_busqueda}%"}).fetchall()
             if not resultados:
@@ -259,12 +269,6 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     texto_btn = f"❌ {nombre_corto} (Recibes: $ {valor_descarte:,.2f} M)"
                     keyboard_sell.append([InlineKeyboardButton(texto_btn, callback_data=f"confirmar_sell_{p.pes_id}")])
 
-                # keyboard_sell = []
-                # for p in my_players:
-                #     valor_descarte = p.market_value_real * 0.5
-                #     texto_btn = f"❌ {p.pes_name} (Recibes: $ {valor_descarte:,.2f} M)"
-                #     keyboard_sell.append([InlineKeyboardButton(texto_btn, callback_data=f"confirmar_sell_{p.pes_id}")])
-
                 keyboard_sell.append([InlineKeyboardButton("« Menú", callback_data="volver_menu")])
                 await query.message.edit_text("💰 <b>PANEL DE LIQUIDACIÓN (VENTA RÁPIDA)</b>\n\nSelecciona el jugador que deseas vender a la banca. Recibirás el <b>50% de su valor</b>:", reply_markup=InlineKeyboardMarkup(keyboard_sell), parse_mode="HTML")
         except Exception as e:
@@ -295,7 +299,7 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 conn.execute(query_insert_tx, {
                     "pid": player_id, 
                     "from_m": comprador.manager_id, 
-                    "to_m": comprador.manager_id,  # Evita el NULL restrictivo de tu BD
+                    "to_m": None,  # <-- Representa a la BANCA / Sistema
                     "fee": monto_recuperado, 
                     "tdate": datetime.now()
                 })
@@ -368,7 +372,7 @@ def main() -> None:
     app = Application.builder().token(TOKEN).build()
     
     app.add_handler(CommandHandler("start", start))
-    app.add_handler(CommandHandler("registrar", registrar_manager))
+    app.add_handler(CommandHandler("r", registrar_manager))
     app.add_handler(CommandHandler("b", buscar_jugador)) # Alias corto "Buscar"
     app.add_handler(CommandHandler("apodo", cambiar_apodo))
     

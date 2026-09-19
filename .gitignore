@@ -1,6 +1,19 @@
-gcp_keys.json
+# Entorno virtual
+venv/
 .venv/
+env/
+
+# Variables de entorno y credenciales
+.env
+*.json
+service_account.json
+
+# Cache de Python
 __pycache__/
+*.pyc
+
+# Archivos de VS Code / IDEs
+.vscode/
+.idea/
 *.csv
 notas.txt
-EDIT00000000
