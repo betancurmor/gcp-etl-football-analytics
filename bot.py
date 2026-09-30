@@ -5,6 +5,7 @@ from telegram.ext import Application, CallbackQueryHandler, CommandHandler, Mess
 import os
 from dotenv import load_dotenv
 from sqlalchemy import create_engine, text
+from datetime import datetime, timedelta
 
 # Cargar variables del archivo .env
 load_dotenv()
@@ -129,7 +130,7 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             f"───────────────────────\n"
             f"🔔 <b>Notificaciones:</b>\n{alertas_clausulas}\n"
             f"───────────────────────\n"
-            f"💡 <i>Tip: Usa /apodo Tu_Nombre para modificar tu perfil.</i>"
+            f"💡 <i>Tip: Usa /a Tu_Nombre para modificar tu perfil.</i>"
         )
     else:
         texto_tablero = (
@@ -144,12 +145,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     else:
         await update.callback_query.message.edit_text(texto_tablero, reply_markup=reply_markup, parse_mode="HTML")
 
-# ... (El resto de los métodos secundarios adaptados también a HTML para consistencia total)
-
 async def cambiar_apodo(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     telegram_id = update.effective_user.id
     if not context.args:
-        await update.message.reply_text("⚠️ Usa: <code>/apodo Tu_Nuevo_Apodo</code>", parse_mode="HTML")
+        await update.message.reply_text("⚠️ Usa: <code>/a Tu_Nuevo_Apodo</code>", parse_mode="HTML")
         return
     nuevo_apodo = " ".join(context.args)
     try:
@@ -368,13 +367,41 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif query.data == "volver_menu":
         await start(update, context)
 
+async def validar_fecha_transaccion(db_session, player_id):
+    """
+    Verificar si fue adquirido hace menos de 14 dias.
+    Devuelve (True, dias_restantes), de lo contrario (False, 0), sé puede clausular.
+    """
+    query = """
+        SELECT transaction_date
+        FROM fact_transaction
+        WHERE player_id = :player_id
+            AND transaction_type IN ('FREE_AGENT', 'RELEASE_CLAUSE')
+        OREDER BY trasaction_date DESC
+        LIMIT 1;
+    """
+    result = db_session.execute(query, {"player_id": player_id}).fetchone()
+
+    if not result or not result['transaction_date']:
+        return False, 0 # Si no hay registro sé puede comprar
+    
+    ultima_fecha = result['transaction_date']
+    dias_transcurridos = (datetime.now() - ultima_fecha).days
+
+    if dias_transcurridos < 14:
+        dias_restantes = 14 - dias_transcurridos
+        return True, dias_restantes
+
+    return False, 0
+
+
 def main() -> None:
     app = Application.builder().token(TOKEN).build()
     
-    app.add_handler(CommandHandler("start", start))
+    app.add_handler(CommandHandler("s", start))
     app.add_handler(CommandHandler("r", registrar_manager))
-    app.add_handler(CommandHandler("b", buscar_jugador)) # Alias corto "Buscar"
-    app.add_handler(CommandHandler("apodo", cambiar_apodo))
+    app.add_handler(CommandHandler("b", buscar_jugador))
+    app.add_handler(CommandHandler("a", cambiar_apodo))
     
     app.add_handler(CallbackQueryHandler(manejar_botones))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, start))
