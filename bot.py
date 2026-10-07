@@ -102,9 +102,10 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 alerta = conn.execute(query_alertas, {"mid": mgr.manager_id}).fetchone()
                 if alerta:
                     alerta_mgr = alerta.manager_name.split("|")[0].strip() if "|" in alerta.manager_name else alerta.manager_name
+                    fecha_str = alerta.transaction_date.strftime('%d/%m %H:%M') if isinstance(alerta.transaction_date, datetime) else str(alerta.transaction_date)[:16]
                     alertas_clausulas = (
                         f"⚠️ <b>¡ALERTA DE ROBO!</b>\n"
-                        f"El {alerta.transaction_date.strftime('%d/%m %H:%M')} <b>{alerta_mgr}</b> "
+                        f"El {fecha_str} <b>{alerta_mgr}</b> "
                         f"se llevó a <b>{alerta.pes_name}</b> por cláusula."
                     )
                     
@@ -341,6 +342,41 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         partes = query.data.split("_")
         tipo_tx = partes[1]
         player_id = int(partes[2])
+        es_confirmado = len(partes) > 3 and partes[3] == "confirm"
+
+        # VALIDACION DE CLAUSULA (14 DIAS + CONFIRMACION)
+
+        if tipo_tx == "clausula" and not es_confirmado:
+            # Validar 14 dias
+            esta_blindado, dias_restantes = await validar_fecha_transaccion(player_id)
+            if esta_blindado:
+                await query.answer(
+                    f"⛔ Jugador protegido. Faltan {dias_restantes} días para activar su cláusula.",
+                    show_alert=True
+                )
+                return
+
+            # Pantalla de confirmación para evitar compras por accidente
+            try:
+                with engine.connect() as conn:
+                    player = conn.execute(text("SELECT pes_name, release_clause FROM dim_players WHERE pes_id = :pid"), {"pid": player_id}).fetchone()
+                    nombre_corto = acortar_nombre(player.pes_name)
+                    
+                    keyboard_confirm = [
+                        [InlineKeyboardButton("✅ Sí, pagar cláusula", callback_data=f"tx_clausula_{player_id}_confirm")],
+                        [InlineKeyboardButton("❌ Cancelar", callback_data="volver_menu")]
+                    ]
+                    texto_confirmacion = (
+                        f"⚠️ <b>CONFIRMACIÓN DE CLÁUSULA</b>\n\n"
+                        f"¿Estás seguro de pagar la cláusula de rescisión de <b>{nombre_corto}</b> por <code>$ {player.release_clause:,.2f} M</code>?"
+                    )
+                    await query.message.edit_text(texto_confirmacion, reply_markup=InlineKeyboardMarkup(keyboard_confirm), parse_mode="HTML")
+                    return
+            except Exception as e:
+                logging.error(f"Error en pantalla confirmación cláusula: {e}")
+                return
+
+        # EJECUCION DE LA TRANSACCION (FIVHAJE LIBRE O CLAUSULA CONFIRMADA)
         try:
             with engine.begin() as conn:
                 comprador = conn.execute(text("SELECT manager_id, presupuesto FROM dim_managers WHERE platform_id = :pid"), {"pid": str(telegram_id)}).fetchone()
@@ -367,33 +403,42 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     elif query.data == "volver_menu":
         await start(update, context)
 
-async def validar_fecha_transaccion(db_session, player_id):
+async def validar_fecha_transaccion(player_id: int):
     """
     Verificar si fue adquirido hace menos de 14 dias.
     Devuelve (True, dias_restantes), de lo contrario (False, 0), sé puede clausular.
     """
-    query = """
-        SELECT transaction_date
-        FROM fact_transaction
-        WHERE player_id = :player_id
-            AND transaction_type IN ('FREE_AGENT', 'RELEASE_CLAUSE')
-        OREDER BY trasaction_date DESC
-        LIMIT 1;
-    """
-    result = db_session.execute(query, {"player_id": player_id}).fetchone()
+    try:
+        with engine.connect() as conn:
+            query = text(
+                "SELECT transaction_date "
+                "FROM fact_transactions "
+                "WHERE player_id = :player_id "
+                "  AND transaction_type IN ('FREE_AGENT', 'RELEASE_CLAUSE') "
+                "ORDER BY transaction_date DESC "
+                "LIMIT 1"
+            )
+            result = conn.execute(query, {"player_id": player_id}).fetchone()
 
-    if not result or not result['transaction_date']:
-        return False, 0 # Si no hay registro sé puede comprar
-    
-    ultima_fecha = result['transaction_date']
-    dias_transcurridos = (datetime.now() - ultima_fecha).days
+            if not result or not result.transaction_date:
+                return False, 0 # Si no hay registro sé puede comprar
+            
+            ultima_fecha = result.transaction_date
+            
+            # Remover tzinfo si la BD devuelve datetime con timezone para evitar TypeError en la resta
+            if hasattr(ultima_fecha, "tzinfo") and ultima_fecha.tzinfo is not None:
+                ultima_fecha = ultima_fecha.replace(tzinfo=None)
 
-    if dias_transcurridos < 14:
-        dias_restantes = 14 - dias_transcurridos
-        return True, dias_restantes
+            dias_transcurridos = (datetime.now() - ultima_fecha).days
 
-    return False, 0
+            if dias_transcurridos < 14:
+                dias_restantes = 14 - dias_transcurridos
+                return True, dias_restantes
 
+            return False, 0
+    except Exception as e:
+        logging.error(f"Error al vaidar fecha de transaccion: {e}")
+        return False, 0
 
 def main() -> None:
     app = Application.builder().token(TOKEN).build()
