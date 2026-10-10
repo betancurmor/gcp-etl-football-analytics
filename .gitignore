@@ -17,3 +17,6 @@ __pycache__/
 .idea/
 *.csv
 notas.txt
+
+# Adicionales
+base_tm_hist/

@@ -3,6 +3,10 @@ import random
 from thefuzz import fuzz, process
 import pandas_gbq
 import os
+from dotenv import load_dotenv
+
+# Cargar variables de entorno desde el archivo .env
+load_dotenv()
 
 # Credenciales GCP
 os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = "gcp_keys.json"

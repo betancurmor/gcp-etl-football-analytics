@@ -344,22 +344,30 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         player_id = int(partes[2])
         es_confirmado = len(partes) > 3 and partes[3] == "confirm"
 
-        # VALIDACION DE CLAUSULA (14 DIAS + CONFIRMACION)
-
+        # VALIDACIÓN DE CLÁUSULA (14 DÍAS + CONFIRMACIÓN)
         if tipo_tx == "clausula" and not es_confirmado:
-            # Validar 14 dias
-            esta_blindado, dias_restantes = await validar_fecha_transaccion(player_id)
-            if esta_blindado:
-                await query.answer(
-                    f"⛔ Jugador protegido. Faltan {dias_restantes} días para activar su cláusula.",
-                    show_alert=True
-                )
-                return
-
-            # Pantalla de confirmación para evitar compras por accidente
             try:
+                # Validar 14 días
+                esta_blindado, dias_restantes = await validar_fecha_transaccion(player_id)
+                if esta_blindado:
+                    await query.message.edit_text(
+                        f"⛔ <b>JUGADOR PROTEGIDO</b>\n\nEste jugador fue fichado recientemente. Faltan <b>{dias_restantes} días</b> para poder pagar su cláusula de rescisión.",
+                        reply_markup=InlineKeyboardMarkup(back_keyboard),
+                        parse_mode="HTML"
+                    )
+                    return
+
+                # Pantalla de confirmación para evitar compras por accidente
                 with engine.connect() as conn:
-                    player = conn.execute(text("SELECT pes_name, release_clause FROM dim_players WHERE pes_id = :pid"), {"pid": player_id}).fetchone()
+                    player = conn.execute(
+                        text("SELECT pes_name, release_clause FROM dim_players WHERE pes_id = :pid"),
+                        {"pid": player_id}
+                    ).fetchone()
+                    
+                    if not player:
+                        await query.message.edit_text("❌ Jugador no encontrado.", reply_markup=InlineKeyboardMarkup(back_keyboard))
+                        return
+
                     nombre_corto = acortar_nombre(player.pes_name)
                     
                     keyboard_confirm = [
@@ -373,32 +381,68 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     await query.message.edit_text(texto_confirmacion, reply_markup=InlineKeyboardMarkup(keyboard_confirm), parse_mode="HTML")
                     return
             except Exception as e:
-                logging.error(f"Error en pantalla confirmación cláusula: {e}")
+                logging.error(f"Error en validación/pantalla cláusula: {e}")
+                await query.message.edit_text("❌ Ocurrió un error al procesar la cláusula.", reply_markup=InlineKeyboardMarkup(back_keyboard))
                 return
 
-        # EJECUCION DE LA TRANSACCION (FIVHAJE LIBRE O CLAUSULA CONFIRMADA)
+        # EJECUCIÓN DE LA TRANSACCIÓN (FICHAJE LIBRE O CLÁUSULA CONFIRMADA)
         try:
             with engine.begin() as conn:
-                comprador = conn.execute(text("SELECT manager_id, presupuesto FROM dim_managers WHERE platform_id = :pid"), {"pid": str(telegram_id)}).fetchone()
-                player = conn.execute(text("SELECT pes_name, market_value_real, release_clause, manager_id FROM dim_players WHERE pes_id = :pid"), {"pid": player_id}).fetchone()
+                comprador = conn.execute(
+                    text("SELECT manager_id, presupuesto FROM dim_managers WHERE platform_id = :pid"),
+                    {"pid": str(telegram_id)}
+                ).fetchone()
+                
+                player = conn.execute(
+                    text("SELECT pes_name, market_value_real, release_clause, manager_id FROM dim_players WHERE pes_id = :pid"),
+                    {"pid": player_id}
+                ).fetchone()
+                
                 costo = player.market_value_real if tipo_tx == "libre" else player.release_clause
+                
                 if comprador.presupuesto < costo:
-                    await query.message.edit_text(f"❌ <b>Fondos Insuficientes.</b>\nCosto: $ {costo:,.2f} M | Saldo: $ {comprador.presupuesto:,.2f} M", reply_markup=InlineKeyboardMarkup(back_keyboard), parse_mode="HTML")
+                    await query.message.edit_text(
+                        f"❌ <b>Fondos Insuficientes.</b>\nCosto: $ {costo:,.2f} M | Saldo: $ {comprador.presupuesto:,.2f} M",
+                        reply_markup=InlineKeyboardMarkup(back_keyboard),
+                        parse_mode="HTML"
+                    )
                     return
-                conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto - :costo WHERE manager_id = :mid"), {"costo": costo, "mid": comprador.manager_id})
+                
+                conn.execute(
+                    text("UPDATE dim_managers SET presupuesto = presupuesto - :costo WHERE manager_id = :mid"),
+                    {"costo": costo, "mid": comprador.manager_id}
+                )
+                
                 vendedor_id = None
                 if tipo_tx == "clausula":
                     vendedor_id = player.manager_id
-                    conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + :costo WHERE manager_id = :mid"), {"costo": costo, "mid": vendedor_id})
-                conn.execute(text("UPDATE dim_players SET manager_id = :mid WHERE pes_id = :pid"), {"mid": comprador.manager_id, "pid": player_id})
+                    conn.execute(
+                        text("UPDATE dim_managers SET presupuesto = presupuesto + :costo WHERE manager_id = :mid"),
+                        {"costo": costo, "mid": vendedor_id}
+                    )
+                
+                conn.execute(
+                    text("UPDATE dim_players SET manager_id = :mid WHERE pes_id = :pid"),
+                    {"mid": comprador.manager_id, "pid": player_id}
+                )
+                
                 tipo_log = "FREE_AGENT" if tipo_tx == "libre" else "RELEASE_CLAUSE"
-                conn.execute(text(
-                    "INSERT INTO fact_transactions (player_id, from_manager_id, to_manager_id, transfer_fee, transaction_type, transaction_date) "
-                    "VALUES (:pid, :from_m, :to_m, :amt, :ttype, :tdate)"
-                ), {"pid": player_id, "from_m": vendedor_id, "to_m": comprador.manager_id, "amt": costo, "ttype": tipo_log, "tdate": datetime.now()})
-            await query.message.edit_text(f"✅ <b>¡OPERACIÓN EXITOSA!</b>\n\nHas fichado a <b>{player.pes_name}</b> por <code>$ {costo:,.2f} M</code>.", reply_markup=InlineKeyboardMarkup(back_keyboard), parse_mode="HTML")
+                conn.execute(
+                    text(
+                        "INSERT INTO fact_transactions (player_id, from_manager_id, to_manager_id, transfer_fee, transaction_type, transaction_date) "
+                        "VALUES (:pid, :from_m, :to_m, :amt, :ttype, :tdate)"
+                    ),
+                    {"pid": player_id, "from_m": vendedor_id, "to_m": comprador.manager_id, "amt": costo, "ttype": tipo_log, "tdate": datetime.now()}
+                )
+                
+            await query.message.edit_text(
+                f"✅ <b>¡OPERACIÓN EXITOSA!</b>\n\nHas fichado a <b>{player.pes_name}</b> por <code>$ {costo:,.2f} M</code>.",
+                reply_markup=InlineKeyboardMarkup(back_keyboard),
+                parse_mode="HTML"
+            )
         except Exception as e:
             logging.error(f"Error crítico en transacción: {e}")
+            await query.message.edit_text("❌ Error al procesar la transacción.", reply_markup=InlineKeyboardMarkup(back_keyboard))
 
     elif query.data == "volver_menu":
         await start(update, context)
@@ -424,7 +468,7 @@ async def validar_fecha_transaccion(player_id: int):
                 return False, 0 # Si no hay registro sé puede comprar
             
             ultima_fecha = result.transaction_date
-            
+
             # Remover tzinfo si la BD devuelve datetime con timezone para evitar TypeError en la resta
             if hasattr(ultima_fecha, "tzinfo") and ultima_fecha.tzinfo is not None:
                 ultima_fecha = ultima_fecha.replace(tzinfo=None)

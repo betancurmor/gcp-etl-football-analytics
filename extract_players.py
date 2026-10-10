@@ -72,12 +72,12 @@ def scrape_pesmaster_api_paginated(max_players=3000):
                     continue
                 
                 # REGLA 1: Filtrar potencial 0 (Clones/Regens artificiales del juego)
-                try:
-                    pot_int = int(p_pot)
-                    if pot_int == 0:
-                        continue
-                except ValueError:
-                    continue
+                #try:
+                #    pot_int = int(p_pot)
+                #    if pot_int == 0:
+                #        continue
+                #except ValueError:
+                #    continue
 
                 # REGLA 2: Filtrar menores de 17 años (Clones/Regens artificiales del juego)
                 try:
