@@ -18,6 +18,12 @@ DB_PORT = os.getenv("DB_PORT")
 DB_NAME = os.getenv("DB_NAME")
 TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 
+# Leer users para funciones ADM
+ADMIN_TELEGRAM_IDS = [
+    int(os.getenv("USER_ADM1", 0)),
+    int(os.getenv("USER_ADM2", 0))
+    ]
+
 # Construir la conexión
 connection_string = f"postgresql+psycopg2://{DB_USER}:{DB_PASS}@{DB_HOST}:{DB_PORT}/{DB_NAME}"
 engine = create_engine(connection_string)
@@ -184,6 +190,28 @@ async def registrar_manager(update: Update, context: ContextTypes.DEFAULT_TYPE) 
         await update.message.reply_text(f"✅ <b>¡Registro Exitoso!</b>\n🛡️ <b>Equipo:</b> {team_name}\n💰 <b>Presupuesto:</b> $500.00 M", parse_mode="HTML")
     except Exception as e:
         logging.error(f"Error en registro: {e}")
+
+async def panel_admin(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """
+    FUNCION QUE VALIDA LOS USUARIOS ADMIN. POSTERIORMENTE DA ACCESO AL MENU AVANZADO.
+    """
+    telegram_id = update.effective_user.id
+
+    if telegram_id not in ADMIN_TELEGRAM_IDS:
+        await update.message.reply_text("❌ No tienes permisos de administrador para ejecutar este comando.")
+        return
+
+    keyboard = [
+        [InlineKeyboardButton("⚽ Registrar Partido", callback_data="admin_match_start")],
+        [InlineKeyboardButton("<< Menu Principal", callback_data="volver_menu")]
+    ]
+    reply_markup = InlineKeyboardMarkup(keyboard)
+
+    await update.message.reply_text(
+        "🛠️ <b>PANEL DE ADMINISTRACION</b>\n\nSelecciona una opcion de gestion:",
+        reply_markup=reply_markup,
+        parse_mode="HTML"
+    )
 
 async def buscar_jugador(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if not context.args:
@@ -444,6 +472,119 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
             logging.error(f"Error crítico en transacción: {e}")
             await query.message.edit_text("❌ Error al procesar la transacción.", reply_markup=InlineKeyboardMarkup(back_keyboard))
 
+    # REGISTRO DE ENCUENTROS('LOCALWIN', 'DRAW', 'VISIT_WIN')
+    elif query.data == "admin_match_start":
+        # SEGUNDA VAIDACION 'ADM', DEFENSA DE PROFUNDIDAD
+        if telegram_id not in ADMIN_TELEGRAM_IDS:
+            await query.answer("❌ Sin permisos.", show_alert=True)
+            return
+        try:
+            with engine.connect() as conn:
+                managers = conn.execute(text("SELECT manager_id, manager_name FROM dim_managers")).fetchall()
+                if not managers:
+                    await query.message.edit_text("⚠️ No hay mánagers registrados todavía.", reply_markup=InlineKeyboardMarkup(back_keyboard))
+                    return
+
+                keyboard = []
+                for m in managers:
+                    nombre_limpio = m.manager_name.split("|")[0].strip() if "|" in m.manager_name else m.manager_name
+                    keyboard.append([InlineKeyboardButton(f"🏠 {nombre_limpio}", callback_data=f"match_local_{m.manager_id}")])
+                
+                keyboard.append([InlineKeyboardButton("« Menú Admin", callback_data="admin_match_start")])
+                await query.message.edit_text("⚽ <b>REGISTRO DE PARTIDO</b>\n\nSelecciona al <b>Mánager Local</b>:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        except Exception as e:
+            logging.error(f"Error al cargar mánagers local: {e}")
+
+    elif query.data.startswith("match_local_"):
+        local_id = int(query.data.split("_")[2])
+        try:
+            with engine.connect() as conn:
+                managers = conn.execute(text("SELECT manager_id, manager_name FROM dim_managers WHERE manager_id != :lid"), {"lid": local_id}).fetchall()
+                
+                keyboard = []
+                for m in managers:
+                    nombre_limpio = m.manager_name.split("|")[0].strip() if "|" in m.manager_name else m.manager_name
+                    keyboard.append([InlineKeyboardButton(f"✈️ {nombre_limpio}", callback_data=f"match_visit_{local_id}_{m.manager_id}")])
+                
+                keyboard.append([InlineKeyboardButton("« Cancelar", callback_data="admin_match_start")])
+                await query.message.edit_text("⚽ <b>REGISTRO DE PARTIDO</b>\n\nAhora selecciona al <b>Mánager Visitante</b>:", reply_markup=InlineKeyboardMarkup(keyboard), parse_mode="HTML")
+        except Exception as e:
+            logging.error(f"Error al cargar mánagers visitante: {e}")
+
+    elif query.data.startswith("match_visit_"):
+        partes = query.data.split("_")
+        local_id = int(partes[2])
+        visit_id = int(partes[3])
+        
+        try:
+            with engine.connect() as conn:
+                local_mgr = conn.execute(text("SELECT manager_name FROM dim_managers WHERE manager_id = :id"), {"id": local_id}).fetchone()
+                visit_mgr = conn.execute(text("SELECT manager_name FROM dim_managers WHERE manager_id = :id"), {"id": visit_id}).fetchone()
+                
+                l_name = local_mgr.manager_name.split("|")[0].strip() if "|" in local_mgr.manager_name else local_mgr.manager_name
+                v_name = visit_mgr.manager_name.split("|")[0].strip() if "|" in visit_mgr.manager_name else visit_mgr.manager_name
+
+                keyboard = [
+                    [InlineKeyboardButton(f"🏠 Gana {l_name} (+$2M)", callback_data=f"match_res_{local_id}_{visit_id}_LOCALWIN")],
+                    [InlineKeyboardButton("🤝 Empate (+$1M c/u)", callback_data=f"match_res_{local_id}_{visit_id}_DRAW")],
+                    [InlineKeyboardButton(f"✈️ Gana {v_name} (+$2M)", callback_data=f"match_res_{local_id}_{visit_id}_VISITANTEWIN")],
+                    [InlineKeyboardButton("« Cancelar", callback_data="admin_match_start")]
+                ]
+                await query.message.edit_text(
+                    f"⚽ <b>PARTIDO:</b> <b>{l_name}</b> vs <b>{v_name}</b>\n\nSelecciona el resultado final:",
+                    reply_markup=InlineKeyboardMarkup(keyboard),
+                    parse_mode="HTML"
+                )
+        except Exception as e:
+            logging.error(f"Error al preparar opciones de resultado: {e}")
+
+    elif query.data.startswith("match_res_"):
+        partes = query.data.split("_")
+        local_id = int(partes[2])
+        visit_id = int(partes[3])
+        resultado = partes[4] # LOCALWIN, DRAW, VISITANTEWIN
+
+        try:
+            with engine.begin() as conn:
+                # 1. Registrar el partido en fact_matches
+                conn.execute(
+                    text(
+                        "INSERT INTO fact_matches (local_manager_id, visit_manager_id, result_type, match_date) "
+                        "VALUES (:lid, :vid, :rtype, :mdate)"
+                    ),
+                    {"lid": local_id, "vid": visit_id, "rtype": resultado, "mdate": datetime.now()}
+                )
+
+                # 2. Actualizar presupuestos según el resultado
+                if resultado == "LOCALWIN":
+                    conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 2.0 WHERE manager_id = :id"), {"id": local_id})
+                elif resultado == "VISITANTEWIN":
+                    conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 2.0 WHERE manager_id = :id"), {"id": visit_id})
+                elif resultado == "DRAW":
+                    conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 1.0 WHERE manager_id = :id"), {"id": local_id})
+                    conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 1.0 WHERE manager_id = :id"), {"id": visit_id})
+
+                # Obtener nombres para el mensaje de éxito
+                l_mgr = conn.execute(text("SELECT manager_name FROM dim_managers WHERE manager_id = :id"), {"id": local_id}).fetchone()
+                v_mgr = conn.execute(text("SELECT manager_name FROM dim_managers WHERE manager_id = :id"), {"id": visit_id}).fetchone()
+                l_name = l_mgr.manager_name.split("|")[0].strip() if "|" in l_mgr.manager_name else l_mgr.manager_name
+                v_name = v_mgr.manager_name.split("|")[0].strip() if "|" in v_mgr.manager_name else v_mgr.manager_name
+
+            texto_exito = (
+                f"✅ <b>¡PARTIDO REGISTRADO EXITOSAMENTE!</b>\n\n"
+                f"🏟️ <b>Encuentro:\n</b> {l_name} vs {v_name}\n"
+                f"📊 <b>Resultado:\n</b> {resultado}\n\n"
+                f"💰 Presupuestos actualizados automáticamente."
+            )
+            keyboard_done = [[InlineKeyboardButton("⚽ Registrar Otro Partido", callback_data="admin_match_start")],
+                             [InlineKeyboardButton("« Menú Principal", callback_data="volver_menu")]]
+            await query.message.edit_text(texto_exito, reply_markup=InlineKeyboardMarkup(keyboard_done), parse_mode="HTML")
+
+        except Exception as e:
+            logging.error(f"Error al registrar resultado de partido: {e}")
+            await query.message.edit_text("❌ Ocurrió un error al guardar el partido en la base de datos.", reply_markup=InlineKeyboardMarkup(back_keyboard))
+
+
     elif query.data == "volver_menu":
         await start(update, context)
 
@@ -491,6 +632,7 @@ def main() -> None:
     app.add_handler(CommandHandler("r", registrar_manager))
     app.add_handler(CommandHandler("b", buscar_jugador))
     app.add_handler(CommandHandler("a", cambiar_apodo))
+    app.add_handler(CommandHandler("adm", panel_admin))
     
     app.add_handler(CallbackQueryHandler(manejar_botones))
     app.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, start))
