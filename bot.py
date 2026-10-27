@@ -640,7 +640,6 @@ def main() -> None:
     print(" Bot activo y escuchando peticiones en Telegram (Modo HTML)...")
     app.run_polling(allowed_updates=Update.ALL_TYPES)
 
-if __name__ == "__main__":
     PORT = int(os.environ.get("PORT", 8443))
 
     WEBHOOK_URL = os.getenv("WEBHOOK", "https://pes-fantasy-bot.onrender.com/telegram")
@@ -650,4 +649,7 @@ if __name__ == "__main__":
         port=PORT,
         url_path="telegram",
         webhook_url=WEBHOOK_URL
-    )  
+    ) 
+
+if __name__ == "__main__":
+    main()
