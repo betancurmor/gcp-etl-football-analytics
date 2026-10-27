@@ -648,7 +648,8 @@ def main() -> None:
         listen="0.0.0.0",
         port=PORT,
         url_path="telegram",
-        webhook_url=WEBHOOK_URL
+        webhook_url=WEBHOOK_URL,
+        stop_signals=None # Evita loop en Render
     ) 
 
 if __name__ == "__main__":
