@@ -526,10 +526,16 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 keyboard = [
                     [InlineKeyboardButton(f"🏠 Gana {l_name} (+$2M)", callback_data=f"match_res_{local_id}_{visit_id}_LOCALWIN")],
-                    [InlineKeyboardButton("🤝 Empate (+$1M c/u)", callback_data=f"match_res_{local_id}_{visit_id}_DRAW")],
-                    [InlineKeyboardButton(f"✈️ Gana {v_name} (+$2M)", callback_data=f"match_res_{local_id}_{visit_id}_VISITANTEWIN")],
+
+                    [InlineKeyboardButton(f"🏠 Gana en Penales 🥅 {l_name} (+$1M) - {v_name} (+$1M) ", callback_data=f"match_res_{local_id}_{visit_id}_LOCALWINPENALTYS")]
+
+                    [InlineKeyboardButton(f"✈️ Gana {v_name} (+$2M)", callback_data=f"match_res_{local_id}_{visit_id}_VISITWIN")],
+
+                    [InlineKeyboardButton(f"✈️ Gana en Penales 🥅 {v_name} (+$1M) - {l_name} (+$1M) ", callback_data=f"match_res_{local_id}_{visit_id}_VISITWINPENALTYS")]                    
+
                     [InlineKeyboardButton("« Cancelar", callback_data="admin_match_start")]
                 ]
+
                 await query.message.edit_text(
                     f"⚽ <b>PARTIDO:</b> <b>{l_name}</b> vs <b>{v_name}</b>\n\nSelecciona el resultado final:",
                     reply_markup=InlineKeyboardMarkup(keyboard),
@@ -542,11 +548,11 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
         partes = query.data.split("_")
         local_id = int(partes[2])
         visit_id = int(partes[3])
-        resultado = partes[4] # LOCALWIN, DRAW, VISITANTEWIN
+        resultado = partes[4] # localnormal, localpen, visitpen, visitnormal
 
         try:
             with engine.begin() as conn:
-                # 1. Registrar el partido en fact_matches
+                # Registrar el partido en fact_matches
                 conn.execute(
                     text(
                         "INSERT INTO fact_matches (local_manager_id, visit_manager_id, result_type, match_date) "
@@ -555,14 +561,54 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                     {"lid": local_id, "vid": visit_id, "rtype": resultado, "mdate": datetime.now()}
                 )
 
-                # 2. Actualizar presupuestos según el resultado
+                # Actualizar presupuestos según el resultado
                 if resultado == "LOCALWIN":
                     conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 2.0 WHERE manager_id = :id"), {"id": local_id})
-                elif resultado == "VISITANTEWIN":
+                    winning_id = local_id
+                elif resultado == "VISITWIN":
                     conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 2.0 WHERE manager_id = :id"), {"id": visit_id})
-                elif resultado == "DRAW":
+                    winning_id = visit_id
+                elif resultado == "LOCALWINPENALTYS":
                     conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 1.0 WHERE manager_id = :id"), {"id": local_id})
                     conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 1.0 WHERE manager_id = :id"), {"id": visit_id})
+                    winning_id = local_id
+                elif resultado == "VISITWINPENALTYS":
+                    conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 1.0 WHERE manager_id = :id"), {"id": local_id})
+                    conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 1.0 WHERE manager_id = :id"), {"id": visit_id})   
+                    winning_id = visit_id
+
+                # Logica de Racha - 4 y 8 victorias seguidas
+                bonus_mensage = ""
+                historial = conn.execute(
+                    text("""
+                        SELECT local_manager_id, visit_manager_id, result_type
+                        FROM fact_matches
+                        WHERE local_manager_id = :mid OR visit_manager_id = :mid
+                        ORDER BY match_id DESC
+                        LIMIT 10
+                    """),
+                    {"mid": winning_id}
+                ).fetchall()
+
+                racha_victorias = 0
+                for m in historial:
+                    es_local = (m.local_manager_id == winning_id)
+                    # Consideramos victoria si gano en normal o en penales del lado que le correspondia
+                    es_victoria_local = es_local and m.result_type in ["LOCALWIN", "LOCALWINPENALTYS"]  
+                    es_vistoria_visitante = (not es_local) and m.result_type in ["VISITWIN", "VISITWINPENALTYS"]     
+
+                    if es_victoria_local or es_vistoria_visitante:
+                        racha_victorias += 1
+                    else:
+                        break # Se rompe la racha     
+
+                if racha_victorias == 4:
+                    conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 10.0 WHERE manager_id = :id"), {"id": winning_id})
+                    bonus_mensaje = "\n\n🔥 <b>¡RACHA DE FUEGO! (4 victorias)</b>\n💰 ¡Bono aplicado: <b>+$10M extra!</b>"
+                elif racha_victorias == 8:
+                    conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 30.0 WHERE manager_id = :id"), {"id": winning_id})
+                    bonus_mensaje = "\n\n⚡ <b>¡RACHA HISTÓRICA! (8 victorias)</b>\n💰 ¡Super Bono aplicado: <b>+$30M extra!</b>"   
+
 
                 # Obtener nombres para el mensaje de éxito
                 l_mgr = conn.execute(text("SELECT manager_name FROM dim_managers WHERE manager_id = :id"), {"id": local_id}).fetchone()
