@@ -581,13 +581,15 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 # Logica de Racha - 4 y 8 victorias seguidas
                 bonus_mensage = ""
+                
+                # Consultamos los últimos 15 partidos donde participó el ganador
                 historial = conn.execute(
                     text("""
                         SELECT local_manager_id, visit_manager_id, result_type
-                        FROM fact_matches
-                        WHERE local_manager_id = :mid OR visit_manager_id = :mid
-                        ORDER BY match_id DESC
-                        LIMIT 10
+                        FROM fact_matches 
+                        WHERE local_manager_id = :mid OR visit_manager_id = :mid 
+                        ORDER BY match_id DESC 
+                        LIMIT 15
                     """),
                     {"mid": winning_id}
                 ).fetchall()
@@ -595,21 +597,21 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 racha_victorias = 0
                 for m in historial:
                     es_local = (m.local_manager_id == winning_id)
-                    # Consideramos victoria si gano en normal o en penales del lado que le correspondia
                     es_victoria_local = es_local and m.result_type in ["LOCALWIN", "LOCALWINPENALTYS"]  
-                    es_vistoria_visitante = (not es_local) and m.result_type in ["VISITWIN", "VISITWINPENALTYS"]     
+                    es_victoria_visitante = (not es_local) and m.result_type in ["VISITWIN", "VISITWINPENALTYS"]     
 
-                    if es_victoria_local or es_vistoria_visitante:
+                    if es_victoria_local or es_victoria_visitante:
                         racha_victorias += 1
                     else:
-                        break # Se rompe la racha     
+                        break # Se rompe la racha al primer tropiezo
 
+                # Validamos exactamente los hitos (4 o 8 o más)
                 if racha_victorias == 4:
                     conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 10.0 WHERE manager_id = :id"), {"id": winning_id})
                     bonus_mensage = "\n\n🔥 <b>¡RACHA DE FUEGO! (4 victorias)</b>\n💰 ¡Bono aplicado: <b>+$10M extra!</b>"
-                elif racha_victorias == 8:
+                elif racha_victorias >= 8:
                     conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 30.0 WHERE manager_id = :id"), {"id": winning_id})
-                    bonus_mensage = "\n\n⚡ <b>¡RACHA HISTÓRICA! (8 victorias)</b>\n💰 ¡Super Bono aplicado: <b>+$30M extra!</b>"   
+                    bonus_mensage = f"\n\n⚡ <b>¡RACHA HISTÓRICA! ({racha_victorias} victorias)</b>\n💰 ¡Super Bono aplicado: <b>+$30M extra!</b>"
 
 
                 # Obtener nombres para el mensaje de éxito
