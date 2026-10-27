@@ -527,11 +527,11 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 keyboard = [
                     [InlineKeyboardButton(f"🏠 Gana {l_name} (+$2M)", callback_data=f"match_res_{local_id}_{visit_id}_LOCALWIN")],
 
-                    [InlineKeyboardButton(f"🏠 Gana en Penales 🥅 {l_name} (+$1M) - {v_name} (+$1M) ", callback_data=f"match_res_{local_id}_{visit_id}_LOCALWINPENALTYS")]
+                    [InlineKeyboardButton(f"🏠 Gana en Penales 🥅 {l_name} (+$1M) - {v_name} (+$1M) ", callback_data=f"match_res_{local_id}_{visit_id}_LOCALWINPENALTYS")],
 
                     [InlineKeyboardButton(f"✈️ Gana {v_name} (+$2M)", callback_data=f"match_res_{local_id}_{visit_id}_VISITWIN")],
 
-                    [InlineKeyboardButton(f"✈️ Gana en Penales 🥅 {v_name} (+$1M) - {l_name} (+$1M) ", callback_data=f"match_res_{local_id}_{visit_id}_VISITWINPENALTYS")]                    
+                    [InlineKeyboardButton(f"✈️ Gana en Penales 🥅 {v_name} (+$1M) - {l_name} (+$1M) ", callback_data=f"match_res_{local_id}_{visit_id}_VISITWINPENALTYS")],                    
 
                     [InlineKeyboardButton("« Cancelar", callback_data="admin_match_start")]
                 ]
@@ -543,6 +543,8 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 )
         except Exception as e:
             logging.error(f"Error al preparar opciones de resultado: {e}")
+            # Para que no se quede pensando en caso de fallas.
+            await query.message.edit_text("❌ Ocurrió un error al cargar las opciones.", reply_markup=InlineKeyboardMarkup([[InlineKeyboardButton("« Menú", callback_data="volver_menu")]]))
 
     elif query.data.startswith("match_res_"):
         partes = query.data.split("_")
