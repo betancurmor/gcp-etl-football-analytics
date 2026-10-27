@@ -606,10 +606,10 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
                 if racha_victorias == 4:
                     conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 10.0 WHERE manager_id = :id"), {"id": winning_id})
-                    bonus_mensaje = "\n\n🔥 <b>¡RACHA DE FUEGO! (4 victorias)</b>\n💰 ¡Bono aplicado: <b>+$10M extra!</b>"
+                    bonus_mensage = "\n\n🔥 <b>¡RACHA DE FUEGO! (4 victorias)</b>\n💰 ¡Bono aplicado: <b>+$10M extra!</b>"
                 elif racha_victorias == 8:
                     conn.execute(text("UPDATE dim_managers SET presupuesto = presupuesto + 30.0 WHERE manager_id = :id"), {"id": winning_id})
-                    bonus_mensaje = "\n\n⚡ <b>¡RACHA HISTÓRICA! (8 victorias)</b>\n💰 ¡Super Bono aplicado: <b>+$30M extra!</b>"   
+                    bonus_mensage = "\n\n⚡ <b>¡RACHA HISTÓRICA! (8 victorias)</b>\n💰 ¡Super Bono aplicado: <b>+$30M extra!</b>"   
 
 
                 # Obtener nombres para el mensaje de éxito
@@ -623,6 +623,7 @@ async def manejar_botones(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
                 f"🏟️ <b>Encuentro:\n</b> {l_name} vs {v_name}\n"
                 f"📊 <b>Resultado:\n</b> {resultado}\n\n"
                 f"💰 Presupuestos actualizados automáticamente."
+                f"{bonus_mensage}"
             )
             keyboard_done = [[InlineKeyboardButton("⚽ Registrar Otro Partido", callback_data="admin_match_start")],
                              [InlineKeyboardButton("« Menú Principal", callback_data="volver_menu")]]
